@@ -209,6 +209,7 @@ public class RIL extends BaseCommands implements CommandsInterface {
     AtomicBoolean mTestingEmergencyCall = new AtomicBoolean(false);
 
     final Integer mPhoneId;
+    private boolean mUseOldMncMccFormat;
 
     /**
      * A set that records if radio service is disabled in hal for
@@ -223,17 +224,17 @@ public class RIL extends BaseCommands implements CommandsInterface {
     Set<Integer> mDisabledOemHookServices = new HashSet();
 
     /* default work source which will blame phone process */
-    private WorkSource mRILDefaultWorkSource;
+    protected WorkSource mRILDefaultWorkSource;
 
     /* Worksource containing all applications causing wakelock to be held */
     private WorkSource mActiveWakelockWorkSource;
 
     /** Telephony metrics instance for logging metrics event */
-    private TelephonyMetrics mMetrics = TelephonyMetrics.getInstance();
+    protected TelephonyMetrics mMetrics = TelephonyMetrics.getInstance();
     /** Radio bug detector instance */
     private RadioBugDetector mRadioBugDetector = null;
 
-    boolean mIsMobileNetworkSupported;
+    protected boolean mIsMobileNetworkSupported;
     RadioResponse mRadioResponse;
     RadioIndication mRadioIndication;
     volatile IRadio mRadioProxy = null;
@@ -393,7 +394,7 @@ public class RIL extends BaseCommands implements CommandsInterface {
         }
     }
 
-    private void resetProxyAndRequestList() {
+    protected void resetProxyAndRequestList() {
         mRadioProxy = null;
         mOemHookProxy = null;
 
@@ -580,6 +581,9 @@ public class RIL extends BaseCommands implements CommandsInterface {
             mRadioBugDetector = new RadioBugDetector(context, mPhoneId);
         }
 
+        mUseOldMncMccFormat = SystemProperties.getBoolean(
+                "ro.telephony.use_old_mnc_mcc_format", false);
+
         ConnectivityManager cm = (ConnectivityManager)context.getSystemService(
                 Context.CONNECTIVITY_SERVICE);
         mIsMobileNetworkSupported = cm.isNetworkSupported(ConnectivityManager.TYPE_MOBILE);
@@ -649,6 +653,12 @@ public class RIL extends BaseCommands implements CommandsInterface {
         RILRequest rr = RILRequest.obtain(request, result, workSource);
         addRequest(rr);
         return rr;
+    }
+
+    protected int obtainRequestSerial(int request, Message result, WorkSource workSource) {
+        RILRequest rr = RILRequest.obtain(request, result, workSource);
+        addRequest(rr);
+        return rr.mSerial;
     }
 
     private void handleRadioProxyExceptionForRR(RILRequest rr, String caller, Exception e) {
@@ -1999,6 +2009,10 @@ public class RIL extends BaseCommands implements CommandsInterface {
             RILRequest rr = obtainRequest(RIL_REQUEST_SET_NETWORK_SELECTION_MANUAL, result,
                     mRILDefaultWorkSource);
 
+            if (mUseOldMncMccFormat && !TextUtils.isEmpty(operatorNumeric)) {
+                operatorNumeric += "+";
+            }
+
             if (RILJ_LOGD) {
                 riljLog(rr.serialString() + "> " + requestToString(rr.mRequest)
                         + " operatorNumeric = " + operatorNumeric);
@@ -2984,7 +2998,7 @@ public class RIL extends BaseCommands implements CommandsInterface {
         }
     }
 
-    private void constructCdmaSendSmsRilRequest(CdmaSmsMessage msg, byte[] pdu) {
+    protected void constructCdmaSendSmsRilRequest(CdmaSmsMessage msg, byte[] pdu) {
         int addrNbrOfDigits;
         int subaddrNbrOfDigits;
         int bearerDataLength;
@@ -3020,6 +3034,11 @@ public class RIL extends BaseCommands implements CommandsInterface {
                         + ex);
             }
         }
+    }
+
+    @Override
+    public void sendCdmaSms(byte[] pdu, Message result, boolean expectMore) {
+        sendCdmaSms(pdu, result);
     }
 
     @Override
@@ -3251,7 +3270,7 @@ public class RIL extends BaseCommands implements CommandsInterface {
 
             CdmaSmsWriteArgs args = new CdmaSmsWriteArgs();
             args.status = status;
-            constructCdmaSendSmsRilRequest(args.message, pdu.getBytes());
+            constructCdmaSendSmsRilRequest(args.message, IccUtils.hexStringToBytes(pdu));
 
             try {
                 radioProxy.writeSmsToRuim(rr.mSerial, args);
@@ -4812,6 +4831,15 @@ public class RIL extends BaseCommands implements CommandsInterface {
         return rr;
     }
 
+    protected Message getMessageFromRequest(Object request) {
+        RILRequest rr = (RILRequest)request;
+        Message result = null;
+        if (rr != null) {
+                result = rr.mResult;
+        }
+        return result;
+    }
+
     /**
      * This is a helper function to be called at the end of all RadioResponse callbacks.
      * It takes care of sending error response, logging, decrementing wakelock if needed, and
@@ -4842,6 +4870,11 @@ public class RIL extends BaseCommands implements CommandsInterface {
             }
             rr.release();
         }
+    }
+
+    protected void processResponseDone(Object request, RadioResponseInfo responseInfo, Object ret) {
+        RILRequest rr = (RILRequest)request;
+        processResponseDone(rr, responseInfo, ret);
     }
 
     /**
@@ -5660,6 +5693,8 @@ public class RIL extends BaseCommands implements CommandsInterface {
                 return "RIL_UNSOL_KEEPALIVE_STATUS";
             case RIL_UNSOL_PHYSICAL_CHANNEL_CONFIG:
                 return "RIL_UNSOL_PHYSICAL_CHANNEL_CONFIG";
+            case RIL_UNSOL_EMERGENCY_NUMBER_LIST:
+                return "RIL_UNSOL_EMERGENCY_NUMBER_LIST";
             default:
                 return "<unknown response>";
         }

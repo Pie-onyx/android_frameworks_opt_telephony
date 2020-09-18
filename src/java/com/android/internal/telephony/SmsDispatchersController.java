@@ -26,6 +26,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.hardware.radio.V1_0.RadioTechnologyFamily;
 import android.net.Uri;
 import android.os.AsyncResult;
 import android.os.Handler;
@@ -335,10 +336,10 @@ public class SmsDispatchersController extends Handler {
 
     private void setImsSmsFormat(int format) {
         switch (format) {
-            case PhoneConstants.PHONE_TYPE_GSM:
+            case RadioTechnologyFamily.THREE_GPP:
                 mImsSmsFormat = SmsConstants.FORMAT_3GPP;
                 break;
-            case PhoneConstants.PHONE_TYPE_CDMA:
+            case RadioTechnologyFamily.THREE_GPP2:
                 mImsSmsFormat = SmsConstants.FORMAT_3GPP2;
                 break;
             default:
@@ -433,17 +434,26 @@ public class SmsDispatchersController extends Handler {
         String newFormat =
                 (PhoneConstants.PHONE_TYPE_CDMA == mPhone.getPhoneType())
                         ? mCdmaDispatcher.getFormat() : mGsmDispatcher.getFormat();
+        if(mImsSmsDispatcher.isAvailable() && !tracker.mIsFallBackRetry) {
+            newFormat = mImsSmsDispatcher.getFormat();
+        }
 
         // was previously sent sms format match with voice tech?
         if (oldFormat.equals(newFormat)) {
-            if (isCdmaFormat(newFormat)) {
-                Rlog.d(TAG, "old format matched new format (cdma)");
-                mCdmaDispatcher.sendSms(tracker);
+            if (mImsSmsDispatcher.isAvailable() && !tracker.mIsFallBackRetry) {
+                Rlog.d(TAG, "old format matched new format processing over IMS");
+                mImsSmsDispatcher.sendSms(tracker);
                 return;
             } else {
-                Rlog.d(TAG, "old format matched new format (gsm)");
-                mGsmDispatcher.sendSms(tracker);
-                return;
+                if (isCdmaFormat(newFormat)) {
+                    Rlog.d(TAG, "old format matched new format (cdma)");
+                    mCdmaDispatcher.sendSms(tracker);
+                    return;
+                } else {
+                    Rlog.d(TAG, "old format matched new format (gsm)");
+                    mGsmDispatcher.sendSms(tracker);
+                    return;
+                }
             }
         }
 
@@ -500,8 +510,12 @@ public class SmsDispatchersController extends Handler {
         // replace old smsc and pdu with newly encoded ones
         map.put("smsc", pdu.encodedScAddress);
         map.put("pdu", pdu.encodedMessage);
-
-        SMSDispatcher dispatcher = (isCdmaFormat(newFormat)) ? mCdmaDispatcher : mGsmDispatcher;
+        SMSDispatcher dispatcher;
+        if (mImsSmsDispatcher.isAvailable() && !tracker.mIsFallBackRetry) {
+            dispatcher = mImsSmsDispatcher;
+        } else {
+            dispatcher = (isCdmaFormat(newFormat)) ? mCdmaDispatcher : mGsmDispatcher;
+        }
 
         tracker.mFormat = dispatcher.getFormat();
         dispatcher.sendSms(tracker);
